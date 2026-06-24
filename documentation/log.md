@@ -59,9 +59,35 @@ Designing the application to be completely infrastructure-agnostic so it can be 
 
 ---
 
-## TODO: Model Evaluation List
-*Need to test these (and/or other) models locally to see which handles Hungarian language RAG best:*
+## Entry 02: Looking at a few models
+**Timestamp: June 22, 2026**
 
-* [ ] **Llama 3 (8B):** Meta's lightweight model. Highly capable of following strict RAG instructions, but need to test if it defaults back to English when confused.
-* [ ] **Qwen 2.5 (7B):** Alibaba's open-source model. Excellent multilingual benchmarks; might write more natural-sounding Hungarian than Llama.
-* [ ] **Aya 23 (8B):** Cohere's open-weights model designed explicitly for global language performance. High potential for local Hungarian inference.
+Started evaluating actual models to plug into the Ollama engine. Realized that frontier models (120B+ parameters) are too heavy for standard dorm server infrastructure, so the focus must remain on the 8B-32B parameter range.
+
+Attempted to test **Racka-4B** (a newly released model from ELTE specifically optimized for Hungarian reasoning). Discovered Ollama's direct Hugging Face integration, but hit errors because Racka is a "Gated Model" requiring explicit academic licensing agreements on Hugging Face.
+
+#### Strategic Pivot:
+
+Instead of fighting with model weights, SSH keys, and general-knowledge testing, I am putting all model selection on pause.
+
+#### TODO: Next Steps
+
+* [x] **Build the Data Pipeline:** Write the Python script to load sample text files, chunk them using `langchain`, embed them, and save them to a local Milvus instance.
+
+* [ ] **Chunking & Vector DB:** Implement LangChain splitters to chunk the Docling output, translate it using a Hungarian-capable embedding model and insert it into Milvus Lite.
+
+* [ ] **Construct the RAG Prompt:** Create the strict system prompt.
+
+* [ ] **Model Evaluation (Delayed):** Once the database works, test open-weights models (Llama 3, Qwen 2.5). (If the open models struggle with Hungarian RAG, log into Hugging Face, formally request academic access to `elte-nlp/Racka-4B` or the quantized model, set up the local SSH token, and test the ELTE model.)
+
+* [ ] **Hugging Face Authorization:** Formally request academic access to `elte-nlp/Racka-4B`, set up the local SSH token, and test the ELTE model.
+
+## Entry 03: Building the data pipeline
+**Timestamp: June 24, 2026**
+
+Began building the data ingestion pipeline (`ingest.py`) to process the documents, PDFs, and application forms.
+
+#### Implementation Notes:
+* **The Parser Upgrade:** Skipped legacy parsers (`PyPDFLoader`, `docx2txt`) entirely and integrated **Docling** (via `langchain-docling`). Docling uses internal AI layout models to preserve document structure, meaning the AI will actually understand tables, headers, and column reading orders instead of seeing scrambled text.
+* **The OCR Bypass Strategy:** Encountered a PyTorch configuration error (`torch.PP-OCRv6.det.small`) because Docling was attempting to run an OCR vision model over the PDFs. Since almost all university documents are "born-digital" (exported directly from Word/Docs), I configured `PdfPipelineOptions` to explicitly disable OCR (`do_ocr = False`).
+* **Result:** This bypasses the dependency crash, extracts the embedded digital text with 100% spelling accuracy, and runs faster than scanning pixels.
