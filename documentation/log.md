@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADRs)
 
-# DevLog: SSSL Community AI Assistant — Engineering & Architecture Journey
+# DevLog: Community AI Assistant — Engineering & Architecture Journey
 
 ## Entry 01: The Foundation & The Blueprint
 **Timestamp: June 19, 2026**
@@ -82,6 +82,8 @@ Instead of fighting with model weights, SSH keys, and general-knowledge testing,
 
 * [ ] **Hugging Face Authorization:** Formally request academic access to `elte-nlp/Racka-4B`, set up the local SSH token, and test the ELTE model.
 
+---
+
 ## Entry 03: Building the data pipeline
 **Timestamp: June 24, 2026**
 
@@ -91,3 +93,38 @@ Began building the data ingestion pipeline (`ingest.py`) to process the document
 * **The Parser Upgrade:** Skipped legacy parsers (`PyPDFLoader`, `docx2txt`) entirely and integrated **Docling** (via `langchain-docling`). Docling uses internal AI layout models to preserve document structure, meaning the AI will actually understand tables, headers, and column reading orders instead of seeing scrambled text.
 * **The OCR Bypass Strategy:** Encountered a PyTorch configuration error (`torch.PP-OCRv6.det.small`) because Docling was attempting to run an OCR vision model over the PDFs. Since almost all university documents are "born-digital" (exported directly from Word/Docs), I configured `PdfPipelineOptions` to explicitly disable OCR (`do_ocr = False`).
 * **Result:** This bypasses the dependency crash, extracts the embedded digital text with 100% spelling accuracy, and runs faster than scanning pixels.
+
+### The Native Vector Pivot & Overcoming Dependency Hell
+**Timestamp: June 24, 2026**
+
+* **The Milvus Lite Transition:** Officially discarded the initial ChromaDB concept. Chose **Milvus Lite** to enable seamless local development via a flat `.db` file while preserving identical code compatibility with the enterprise cluster models.
+
+* **The Dependency Conflict:** Ran into severe dependency resolution failures using `uv add`. The root cause was dual-layered:
+  1. `uv` attempted to resolve dependencies for future Python versions (>= 3.14), where Milvus binaries don't exist yet. Fixed by explicitly pinning the project bounds in `pyproject.toml` to `requires-python = ">=3.10, <3.14"`.
+  2. The bleeding-edge `pymilvus` v3.0.0 release conflicted with LangChain's vector store wrappers, which still expect a v2.x architecture.
+
+* **The Architecture Decision (The "Native" Shift):** Rather than implementing brittle connection hacks or pinning outdated dependencies to force LangChain's wrapper to behave, **I decided to drop the LangChain Milvus wrapper.** I bypassed it by writing the pipeline using the native, modern `MilvusClient` API provided directly by PyMilvus. This eliminates third-party translation layers, guarantees high-performance batch updates, gives me absolute control over schemas and metric indices (using `COSINE`), and allows dynamic unpacking of Docling metadata keys (`**metadata`).
+
+Consolidated the vector database logic into a robust, object-oriented `DatabaseManager` class to cleanly handle connections, insertions, and searches without polluting the execution scripts.
+
+As the pipeline grew, having database connection logic scattered across `build_database.py`, `test_search.py`, and the ingestion scripts became a liability. I executed a complete object-oriented refactor to centralize state management and cleanly decouple the execution scripts from the configuration.
+
+---
+
+#### Architectural Decisions:
+* **Centralized Configuration (`config.py`):** Encountered a classic Circular Import error between the build script and the database scripts. I resolved this by extracting all global variables (`DB_PATH`, `DATA_DIR`, `COLLECTION_NAME`, `EMBEDDING_DIM`) into a dedicated `config.py` file. This establishes a single source of truth for the entire application.
+* **The `DatabaseManager` Class:** Dropped the procedural scripts and built a unified `DatabaseManager` class to act as the single interface for Milvus.
+  * It handles its own embeddings (`HuggingFaceEmbeddings`).
+  * It dynamically builds the database schema and sets the `FLAT` index structure for perfect recall.
+  * It handles vector insertion and automatically unpacks Docling's dynamic metadata (like source file names).
+* **Memory Management (`load_collection`):** Discovered that Milvus vector searches crash if the collection is only resting on the hard drive (status 'released'). I updated the `DatabaseManager`'s `__init__` method to immediately load the collection into RAM upon connection. This ensures lightning-fast similarity searches the moment the FastAPI server boots up.
+
+#### The Final Local Backend Architecture:
+The core RAG backend is now reduced to five highly modular files:
+1. `data/` *(Raw SSSL PDFs and documents)*
+2. `config.py` *(Global environment and path variables)*
+3. `ingest.py` *(Docling OCR-bypass extraction)*
+4. `db_manager.py` *(The MilvusClient vector engine class)*
+5. `build_database.py` *(Execution script to wipe and rebuild the `.db` file)*
+
+---
